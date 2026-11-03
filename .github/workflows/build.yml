@@ -79,12 +79,14 @@ jobs:
           mkdir -p out/Payload
           cp -R "$ROOT/ios/build/Build/Products/Release-iphoneos/QingPing.app" out/Payload/
           ENT="$ROOT/ios/QingPing.entitlements"
-          if [ -f "$ENT" ]; then
-            codesign -f -s - --entitlements "$ENT" --timestamp=none "out/Payload/QingPing.app"
+          brew install ldid >/dev/null 2>&1 || true
+          if command -v ldid >/dev/null 2>&1 && [ -f "$ENT" ]; then
+            ldid -S"$ENT" "out/Payload/QingPing.app/QingPing"
             echo "--- entitlements ---"
-            codesign -d --entitlements :- "out/Payload/QingPing.app" 2>/dev/null || true
+            ldid -e "out/Payload/QingPing.app/QingPing" || true
           else
-            echo "没找到 entitlements，跳过签名"
+            echo "ldid 不可用，退回 codesign"
+            codesign -f -s - --entitlements "$ENT" --timestamp=none "out/Payload/QingPing.app" || true
           fi
           cd out && zip -qry QingPing.ipa Payload
           ls -la QingPing.ipa
