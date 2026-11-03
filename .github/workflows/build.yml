@@ -7,7 +7,7 @@ on:
 
 jobs:
   tweak:
-    name: Tweak dylib / deb
+    name: Tweak dylib
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -19,28 +19,28 @@ jobs:
           elif [ -d "QingPing/tweak" ]; then echo "root=QingPing" >> "$GITHUB_OUTPUT"
           else echo "找不到 tweak 目录"; ls -la; exit 1; fi
 
-      - name: Install Theos
-        run: |
-          git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
-          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          brew install ldid || true
-
-      - name: Build tweak
+      - name: Build dylib
         working-directory: ${{ steps.locate.outputs.root }}/tweak
-        run: make package FINALPACKAGE=1
-
-      - name: Collect artifacts
         run: |
-          ROOT='${{ steps.locate.outputs.root }}'
-          mkdir -p out
-          cp "$ROOT/tweak/packages/"*.deb out/ 2>/dev/null || true
-          find "$ROOT/tweak/.theos/obj" -name 'QingPing.dylib' -exec cp {} out/ \;
-          ls -la out
+          set -e
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK"
+          xcrun --sdk iphoneos clang -dynamiclib \
+            -arch arm64 -arch arm64e \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=16.0 \
+            -fobjc-arc -O2 \
+            -framework UIKit -framework Foundation -framework StoreKit \
+            -install_name @rpath/QingPing.dylib \
+            -o QingPing.dylib \
+            Tweak.m QingPingStore.m QingPingConfig.m
+          ls -la QingPing.dylib
+          file QingPing.dylib
 
       - uses: actions/upload-artifact@v4
         with:
-          name: QingPing-tweak
-          path: out/*
+          name: QingPing-dylib
+          path: ${{ steps.locate.outputs.root }}/tweak/QingPing.dylib
 
   app:
     name: App ipa
@@ -60,7 +60,9 @@ jobs:
 
       - name: Generate Xcode project
         working-directory: ${{ steps.locate.outputs.root }}/ios
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          ls -la
 
       - name: Build app
         working-directory: ${{ steps.locate.outputs.root }}/ios
@@ -68,6 +70,7 @@ jobs:
           xcodebuild -project QingPing.xcodeproj -scheme QingPing \
             -configuration Release -sdk iphoneos -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" EXPANDED_CODE_SIGN_IDENTITY="" \
             build
 
       - name: Package IPA
