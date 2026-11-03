@@ -175,7 +175,7 @@ struct SettingsView: View {
     private var diagnosticsSection: some View {
         let files = TweaksBridge.containerStatsFiles()
         let readable = TweaksBridge.canReadContainers
-        let prefs = TweaksBridge.prefsDomainHasData
+        let pasteboard = TweaksBridge.readPasteboardRoot() != nil
 
         return Section {
             HStack {
@@ -191,15 +191,21 @@ struct SettingsView: View {
                     .foregroundColor(Color.secondary)
             }
             HStack {
-                Text("共享偏好域")
+                Text("剪贴板通道")
                 Spacer()
-                Text(prefs ? "有数据" : "无数据")
-                    .foregroundColor(prefs ? Color.qpTeal : Color.secondary)
+                Text(pasteboard ? "有数据" : "无数据")
+                    .foregroundColor(pasteboard ? Color.qpTeal : Color.secondary)
+            }
+            HStack {
+                Text("最近同步来源")
+                Spacer()
+                Text(store.lastSource)
+                    .foregroundColor(Color.secondary)
             }
         } header: {
             Text("诊断")
         } footer: {
-            Text("「容器目录不可读」= 清屏缺少平台权限；「统计文件 0 个」= 注入端还没写过数据。")
+            Text("沙盒环境下容器目录必然不可读，统计走「剪贴板通道」。剪贴板有数据但列表为空，说明清屏还没同步。")
         }
     }
 

@@ -5,6 +5,7 @@
 #import "QingPingStore.h"
 #import "QingPingConfig.h"
 #import <CoreFoundation/CoreFoundation.h>
+#import <UIKit/UIKit.h>
 #import <sys/file.h>
 #import <fcntl.h>
 #import <unistd.h>
@@ -102,6 +103,22 @@ static void QPWriteContainerCopy(NSDictionary *root) {
     [data writeToFile:path atomically:YES];
 }
 
+/// 具名剪贴板通道。
+/// 沙盒挡得住文件，挡不住剪贴板服务；TrollStore 环境下这是唯一稳定的跨 App 通道。
+/// 用具名 pasteboard，不会污染用户平时复制的文本。
+static void QPWritePasteboard(NSDictionary *root) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:root options:0 error:NULL];
+    if (data == nil) return;
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (text.length == 0) return;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIPasteboard *board = [UIPasteboard pasteboardWithName:@"com.qingping.stats" create:YES];
+        if (board == nil) return;
+        board.string = text;
+    });
+}
+
 + (void)recordEvent:(QPEventKind)kind
              bundle:(NSString *)bundleID
             appName:(NSString *)appName
@@ -170,6 +187,7 @@ static void QPWriteContainerCopy(NSDictionary *root) {
 
             QPWriteRoot(root);
             QPWriteContainerCopy(root);
+            QPWritePasteboard(root);
         } @catch (NSException *exception) {
             NSLog(@"[QingPing] store error: %@", exception);
         }
@@ -203,6 +221,7 @@ static void QPWriteContainerCopy(NSDictionary *root) {
 
             QPWriteRoot(root);
             QPWriteContainerCopy(root);
+            QPWritePasteboard(root);
         } @catch (NSException *exception) {
             NSLog(@"[QingPing] markLoaded error: %@", exception);
         }

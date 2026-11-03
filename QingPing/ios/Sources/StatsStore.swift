@@ -2,20 +2,24 @@
 //  StatsStore.swift
 //  清屏
 //
-//  数据来源：注入端写入的 com.qingping.stats 偏好域（cfprefsd 中介）。
-//  非越狱环境读不到任何数据，会自动切换到演示数据，保证界面可预览。
+//  数据通道（按优先级）：
+//   1. 具名剪贴板 com.qingping.stats —— 注入端写入，沙盒拦不住，TrollStore 环境可用
+//   2. 共享偏好域 / 各 App 容器文件 —— 仅越狱或拿到平台权限时可用
+//
+//  因为剪贴板同一时刻只保留「最后写入的那个 App」的数据，清屏本地会做一份缓存，
+//  按 Bundle ID 取最大值合并，历史数据不会丢。
 //
 
 import Foundation
-import Combine
+import UIKit
 
 // MARK: - 环境探测
 
 enum TweaksBridge {
     static let statsPath = "/var/mobile/Library/Preferences/com.qingping.stats.plist"
     static let containersPath = "/var/mobile/Containers/Data/Application"
+    static let pasteboardName = UIPasteboard.Name("com.qingping.stats")
 
-    /// 各注入过的 App 在自己沙盒里留下的统计副本（TrollStore 路线主要靠它）
     static func containerStatsFiles() -> [String] {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: containersPath) else {
             return []
@@ -26,23 +30,22 @@ enum TweaksBridge {
         }
     }
 
-    /// 是否检测到注入端。仅做提示用，判断失败不影响读数据。
-    static var tweakInstalled: Bool {
-        if FileManager.default.fileExists(atPath: statsPath) { return true }
-        return !containerStatsFiles().isEmpty
-    }
-
-    /// 能不能列目录（不能 = 缺平台权限，沙盒挡住了）
     static var canReadContainers: Bool {
         (try? FileManager.default.contentsOfDirectory(atPath: containersPath)) != nil
     }
 
-    /// 共享偏好域里有没有数据（注入端走 cfprefsd 写的那份）
-    static var prefsDomainHasData: Bool {
-        guard let defaults = UserDefaults(suiteName: "com.qingping.stats") else { return false }
-        defaults.synchronize()
-        let root = defaults.dictionary(forKey: "root")
-        return !(root?.isEmpty ?? true)
+    /// 注入端通过具名剪贴板投递的统计
+    static func readPasteboardRoot() -> [String: Any]? {
+        guard let board = UIPasteboard(name: pasteboardName, create: false) else { return nil }
+        guard let text = board.string, !text.isEmpty else { return nil }
+        guard let data = text.data(using: .utf8) else { return nil }
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        return object as? [String: Any]
+    }
+
+    static func clearPasteboard() {
+        guard let board = UIPasteboard(name: pasteboardName, create: false) else { return }
+        board.string = ""
     }
 }
 
@@ -53,8 +56,11 @@ final class StatsStore: ObservableObject {
     @Published private(set) var snapshot: StatsSnapshot = .empty
     @Published private(set) var lastRefresh: Date = .distantPast
     @Published private(set) var hasLiveData: Bool = false
+    /// 最近一次同步来源，给设置页显示
+    @Published private(set) var lastSource: String = "无"
 
     static let statsDomain = "com.qingping.stats"
+    private let cacheKey = "qingping.stats.cache"
 
     private let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -65,18 +71,44 @@ final class StatsStore: ObservableObject {
 
     var statusText: String {
         if hasLiveData { return "防护运行中" }
-        if TweaksBridge.tweakInstalled { return "等待拦截数据" }
-        return "未检测到注入"
-    }
-
-    var statusColorName: String {
-        hasLiveData ? "green" : "orange"
+        return "等待首次同步"
     }
 
     // MARK: 读取
 
-    /// 优先读各 App 容器里的副本（TrollStore / 平台权限路线最稳），
-    /// 没有再退回共享偏好域（越狱路线）。
+    func refresh() {
+        lastRefresh = Date()
+
+        var cache = loadCache()
+        var source = "本地缓存"
+        var incoming: [String: Any]?
+
+        if let fromPasteboard = TweaksBridge.readPasteboardRoot() {
+            incoming = fromPasteboard
+            source = "剪贴板"
+        } else if let fromFile = loadBestRoot() {
+            incoming = fromFile
+            source = "文件"
+        }
+
+        if let incoming {
+            merge(incoming, into: &cache)
+            saveCache(cache)
+            lastSource = source
+        }
+
+        let apps = cache["apps"] as? [String: Any] ?? [:]
+        guard !apps.isEmpty else {
+            snapshot = DemoData.snapshot()
+            hasLiveData = false
+            lastSource = "无"
+            return
+        }
+
+        snapshot = makeSnapshot(fromCache: cache)
+        hasLiveData = true
+    }
+
     private func loadBestRoot() -> [String: Any]? {
         if let merged = loadContainers() { return merged }
         return loadRoot()
@@ -96,14 +128,11 @@ final class StatsStore: ObservableObject {
                   let dict = object as? [String: Any] else { continue }
 
             if let rawApps = dict["apps"] as? [String: Any] {
-                for (bundleID, value) in rawApps {
-                    apps[bundleID] = value
-                }
+                for (bundleID, value) in rawApps { apps[bundleID] = value }
             }
             if let rawDaily = dict["daily"] as? [String: Any] {
                 for (day, value) in rawDaily {
-                    let current = daily[day] as? Int ?? 0
-                    daily[day] = current + intValue(value)
+                    daily[day] = max(intValue(daily[day]), intValue(value))
                 }
             }
             if let rawRecent = dict["recent"] as? [[String: Any]] {
@@ -112,84 +141,7 @@ final class StatsStore: ObservableObject {
         }
 
         guard !apps.isEmpty else { return nil }
-        return [
-            "apps": apps,
-            "daily": daily,
-            "recent": recent,
-            "updatedAt": Date().timeIntervalSince1970,
-        ]
-    }
-
-    func refresh() {
-        lastRefresh = Date()
-
-        guard let root = loadBestRoot(), !root.isEmpty else {
-            snapshot = DemoData.snapshot()
-            hasLiveData = false
-            return
-        }
-
-        var apps: [AppStats] = []
-        if let rawApps = root["apps"] as? [String: Any] {
-            for (bundleID, value) in rawApps {
-                guard let info = value as? [String: Any] else { continue }
-                let name = (info["name"] as? String) ?? bundleID
-                let splash = intValue(info["splash"])
-                let misclick = intValue(info["misclick"])
-                let loaded = doubleValue(info["loadedAt"]).map { Date(timeIntervalSince1970: $0) }
-                guard splash + misclick > 0 || loaded != nil else { continue }
-                let last = doubleValue(info["last"]).map { Date(timeIntervalSince1970: $0) }
-                apps.append(AppStats(bundleID: bundleID,
-                                     name: name,
-                                     splash: splash,
-                                     misclick: misclick,
-                                     lastSeen: last,
-                                     loadedAt: loaded))
-            }
-        }
-
-        var dailyRaw: [String: Int] = [:]
-        if let rawDaily = root["daily"] as? [String: Any] {
-            for (key, value) in rawDaily {
-                dailyRaw[key] = intValue(value)
-            }
-        }
-
-        var daily: [DayPoint] = []
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        for offset in stride(from: 6, through: 0, by: -1) {
-            guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
-            let key = dayFormatter.string(from: date)
-            daily.append(DayPoint(id: key, date: date, count: dailyRaw[key] ?? 0))
-        }
-
-        var events: [InterceptEvent] = []
-        if let rawRecent = root["recent"] as? [[String: Any]] {
-            for (index, item) in rawRecent.enumerated() {
-                let bundleID = (item["bid"] as? String) ?? ""
-                guard !bundleID.isEmpty else { continue }
-                let name = (item["name"] as? String) ?? bundleID
-                let kind = InterceptKind.from((item["kind"] as? String) ?? "splash")
-                let detail = (item["detail"] as? String) ?? ""
-                let timestamp = doubleValue(item["ts"]) ?? 0
-                events.append(InterceptEvent(id: "\(bundleID)-\(timestamp)-\(index)",
-                                             bundleID: bundleID,
-                                             appName: name,
-                                             kind: kind,
-                                             detail: detail,
-                                             date: Date(timeIntervalSince1970: timestamp)))
-            }
-        }
-
-        let updated = doubleValue(root["updatedAt"]).map { Date(timeIntervalSince1970: $0) } ?? Date()
-
-        snapshot = StatsSnapshot(apps: apps,
-                                 events: events,
-                                 daily: daily,
-                                 isDemo: false,
-                                 updatedAt: updated)
-        hasLiveData = !apps.isEmpty || !events.isEmpty
+        return ["apps": apps, "daily": daily, "recent": recent]
     }
 
     private func loadRoot() -> [String: Any]? {
@@ -200,7 +152,6 @@ final class StatsStore: ObservableObject {
             }
         }
 
-        // 兜底：直接读偏好文件（越狱环境下该目录可读）
         if let data = FileManager.default.contents(atPath: TweaksBridge.statsPath),
            let object = try? PropertyListSerialization.propertyList(from: data,
                                                                     options: [],
@@ -212,25 +163,151 @@ final class StatsStore: ObservableObject {
         return nil
     }
 
+    // MARK: 缓存合并
+
+    private func loadCache() -> [String: Any] {
+        guard let data = UserDefaults.standard.data(forKey: cacheKey),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dict = object as? [String: Any] else {
+            return [:]
+        }
+        return dict
+    }
+
+    private func saveCache(_ cache: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: cache) else { return }
+        UserDefaults.standard.set(data, forKey: cacheKey)
+    }
+
+    private func merge(_ incoming: [String: Any], into cache: inout [String: Any]) {
+        var apps = cache["apps"] as? [String: Any] ?? [:]
+
+        if let incomingApps = incoming["apps"] as? [String: Any] {
+            for (bundleID, value) in incomingApps {
+                guard let newApp = value as? [String: Any] else { continue }
+                var app = apps[bundleID] as? [String: Any] ?? [:]
+
+                if let name = newApp["name"] as? String, !name.isEmpty {
+                    app["name"] = name
+                }
+                app["splash"] = max(intValue(app["splash"]), intValue(newApp["splash"]))
+                app["misclick"] = max(intValue(app["misclick"]), intValue(newApp["misclick"]))
+                app["last"] = max(doubleValue(app["last"]) ?? 0, doubleValue(newApp["last"]) ?? 0)
+                app["loadedAt"] = max(doubleValue(app["loadedAt"]) ?? 0,
+                                      doubleValue(newApp["loadedAt"]) ?? 0)
+
+                var daily = app["daily"] as? [String: Any] ?? [:]
+                if let newDaily = newApp["daily"] as? [String: Any] {
+                    for (day, val) in newDaily {
+                        daily[day] = max(intValue(daily[day]), intValue(val))
+                    }
+                }
+                app["daily"] = daily
+
+                apps[bundleID] = app
+            }
+        }
+        cache["apps"] = apps
+
+        var recent = cache["recent"] as? [[String: Any]] ?? []
+        var seen = Set<String>()
+        for item in recent { seen.insert(eventKey(item)) }
+        if let newRecent = incoming["recent"] as? [[String: Any]] {
+            for item in newRecent {
+                let key = eventKey(item)
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                recent.append(item)
+            }
+        }
+        recent.sort { (doubleValue($0["ts"]) ?? 0) > (doubleValue($1["ts"]) ?? 0) }
+        if recent.count > 120 { recent = Array(recent.prefix(120)) }
+        cache["recent"] = recent
+        cache["updatedAt"] = Date().timeIntervalSince1970
+    }
+
+    private func eventKey(_ item: [String: Any]) -> String {
+        let bid = (item["bid"] as? String) ?? ""
+        let ts = doubleValue(item["ts"]) ?? 0
+        let kind = (item["kind"] as? String) ?? ""
+        return "\(bid)|\(Int(ts))|\(kind)"
+    }
+
+    // MARK: 生成快照
+
+    private func makeSnapshot(fromCache cache: [String: Any]) -> StatsSnapshot {
+        let rawApps = cache["apps"] as? [String: Any] ?? [:]
+        var apps: [AppStats] = []
+        var dailySum: [String: Int] = [:]
+
+        for (bundleID, value) in rawApps {
+            guard let info = value as? [String: Any] else { continue }
+            let splash = intValue(info["splash"])
+            let misclick = intValue(info["misclick"])
+            let loaded = doubleValue(info["loadedAt"]).map { Date(timeIntervalSince1970: $0) }
+            guard splash + misclick > 0 || loaded != nil else { continue }
+
+            let last = doubleValue(info["last"]).map { Date(timeIntervalSince1970: $0) }
+            apps.append(AppStats(bundleID: bundleID,
+                                 name: (info["name"] as? String) ?? bundleID,
+                                 splash: splash,
+                                 misclick: misclick,
+                                 lastSeen: last,
+                                 loadedAt: loaded))
+
+            if let daily = info["daily"] as? [String: Any] {
+                for (day, val) in daily {
+                    dailySum[day] = (dailySum[day] ?? 0) + intValue(val)
+                }
+            }
+        }
+
+        var daily: [DayPoint] = []
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        for offset in stride(from: 6, through: 0, by: -1) {
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+            let key = dayFormatter.string(from: date)
+            daily.append(DayPoint(id: key, date: date, count: dailySum[key] ?? 0))
+        }
+
+        var events: [InterceptEvent] = []
+        if let rawRecent = cache["recent"] as? [[String: Any]] {
+            for (index, item) in rawRecent.enumerated() {
+                let bundleID = (item["bid"] as? String) ?? ""
+                guard !bundleID.isEmpty else { continue }
+                let timestamp = doubleValue(item["ts"]) ?? 0
+                events.append(InterceptEvent(id: "\(bundleID)-\(timestamp)-\(index)",
+                                             bundleID: bundleID,
+                                             appName: (item["name"] as? String) ?? bundleID,
+                                             kind: InterceptKind.from((item["kind"] as? String) ?? "splash"),
+                                             detail: (item["detail"] as? String) ?? "",
+                                             date: Date(timeIntervalSince1970: timestamp)))
+            }
+        }
+
+        let updated = doubleValue(cache["updatedAt"]).map { Date(timeIntervalSince1970: $0) } ?? Date()
+
+        return StatsSnapshot(apps: apps,
+                             events: events,
+                             daily: daily,
+                             isDemo: false,
+                             updatedAt: updated)
+    }
+
     // MARK: 操作
 
     func clearAll() {
-        guard let defaults = UserDefaults(suiteName: Self.statsDomain) else { return }
-        let empty: [String: Any] = [
-            "version": 1,
-            "apps": [String: Any](),
-            "daily": [String: Any](),
-            "recent": [Any](),
-            "totals": ["splash": 0, "misclick": 0],
-            "updatedAt": Date().timeIntervalSince1970,
-        ]
-        defaults.set(empty, forKey: "root")
-        defaults.synchronize()
+        UserDefaults.standard.removeObject(forKey: cacheKey)
 
-        // 各 App 容器里的副本也一并清掉（没有平台权限时删不掉，忽略即可）
+        if let defaults = UserDefaults(suiteName: Self.statsDomain) {
+            defaults.set([String: Any](), forKey: "root")
+            defaults.synchronize()
+        }
         for path in TweaksBridge.containerStatsFiles() {
             try? FileManager.default.removeItem(atPath: path)
         }
+        TweaksBridge.clearPasteboard()
 
         refresh()
     }
@@ -275,7 +352,6 @@ enum DemoData {
         let today = calendar.startOfDay(for: Date())
 
         let seeds: [(String, String, Int, Int, Int)] = [
-            // name, bundleID, splash, misclick, 最近发生于多少分钟前
             ("微信",    "com.tencent.xin",              14, 4, 6),
             ("抖音",    "com.ss.iphone.ugc.Aweme",      11, 7, 21),
             ("淘宝",    "com.taobao.taobao",             9, 9, 48),
