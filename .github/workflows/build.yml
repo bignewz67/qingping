@@ -1,0 +1,83 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  tweak:
+    name: Tweak dylib / deb
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate project
+        id: locate
+        run: |
+          if [ -d "tweak" ]; then echo "root=." >> "$GITHUB_OUTPUT"
+          elif [ -d "QingPing/tweak" ]; then echo "root=QingPing" >> "$GITHUB_OUTPUT"
+          else echo "找不到 tweak 目录"; ls -la; exit 1; fi
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Build tweak
+        working-directory: ${{ steps.locate.outputs.root }}/tweak
+        run: make package FINALPACKAGE=1
+
+      - name: Collect artifacts
+        run: |
+          ROOT='${{ steps.locate.outputs.root }}'
+          mkdir -p out
+          cp "$ROOT/tweak/packages/"*.deb out/ 2>/dev/null || true
+          find "$ROOT/tweak/.theos/obj" -name 'QingPing.dylib' -exec cp {} out/ \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QingPing-tweak
+          path: out/*
+
+  app:
+    name: App ipa
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate project
+        id: locate
+        run: |
+          if [ -d "ios" ]; then echo "root=." >> "$GITHUB_OUTPUT"
+          elif [ -d "QingPing/ios" ]; then echo "root=QingPing" >> "$GITHUB_OUTPUT"
+          else echo "找不到 ios 目录"; ls -la; exit 1; fi
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ${{ steps.locate.outputs.root }}/ios
+        run: xcodegen generate
+
+      - name: Build app
+        working-directory: ${{ steps.locate.outputs.root }}/ios
+        run: |
+          xcodebuild -project QingPing.xcodeproj -scheme QingPing \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          ROOT='${{ steps.locate.outputs.root }}'
+          mkdir -p out/Payload
+          cp -R "$ROOT/ios/build/Build/Products/Release-iphoneos/QingPing.app" out/Payload/
+          cd out && zip -qry QingPing.ipa Payload
+          ls -la QingPing.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QingPing-ipa
+          path: out/QingPing.ipa
