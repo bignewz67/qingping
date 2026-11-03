@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  仅用于 TrollStore / 自签名环境：
+	  清屏需要读取其它 App 容器里的统计副本（/var/mobile/Containers/Data/Application/...），
+	  普通沙盒签名读不到。
+
+	  用法：用 ldid 重新签名时带上本文件，或用支持「附加 entitlements」的签名工具。
+	  不要在用正常开发者证书 Archive 时启用——Apple 不认这些 entitlements，会签名失败。
+	-->
+	<key>platform-application</key>
+	<true/>
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<key>com.apple.private.security.container-required</key>
+	<false/>
+</dict>
+</plist>

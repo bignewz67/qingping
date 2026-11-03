@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  这里是空字典：不写 Filter 键 = 注入到所有进程，
+	  由 Tweak.xm 的 %ctor 在运行时决定是否激活：
+	    · bundleIdentifier 为空（系统守护进程）→ 跳过
+	    · com.apple.*（系统 App / SpringBoard）→ 跳过
+	    · 命中忽略名单或总开关关闭 → 跳过
+	  这样可以覆盖任意第三方 App，不必为每个 App 手写 Bundle ID。
+
+	  想降低内存与启动开销，可改成显式列表（只处理列出的 App）：
+	    <key>Filter</key>
+	    <dict>
+	      <key>Bundles</key>
+	      <array>
+	        <string>com.tencent.xin</string>
+	        <string>com.ss.iphone.ugc.Aweme</string>
+	      </array>
+	    </dict>
+	-->
+</dict>
+</plist>

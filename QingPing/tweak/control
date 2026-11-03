@@ -1,0 +1,9 @@
+Package: com.qingping.tweak
+Name: 清屏
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: 开屏广告自动跳过 + 误触跳转拦截 + 按 App 统计（iOS 16.0+，rootless）
+Maintainer: QingPing
+Author: QingPing
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 16.0)
