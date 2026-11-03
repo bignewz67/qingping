@@ -31,6 +31,12 @@ FOUNDATION_EXPORT NSString * const QPStatsDomain;  // com.qingping.stats
 /// 防误触：屏蔽广告区域内的点击，默认 YES
 + (BOOL)touchGuardEnabled;
 
+/// 清理悬浮广告挂件（会移除窗口上的小浮层），默认 NO
++ (BOOL)cleanWidgets;
+
+/// 清理信息流广告（自动点「×」或隐藏卡片内容），默认 NO
++ (BOOL)cleanFeed;
+
 /// 开屏广告判定时间窗（秒），默认 15
 + (NSTimeInterval)detectWindow;
 

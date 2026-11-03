@@ -73,6 +73,16 @@ static NSTimeInterval _cacheAt = 0;
     return v == nil ? YES : [v boolValue];
 }
 
++ (BOOL)cleanWidgets {
+    id v = [self prefValue:@"cleanWidgets"];
+    return v == nil ? NO : [v boolValue];
+}
+
++ (BOOL)cleanFeed {
+    id v = [self prefValue:@"cleanFeed"];
+    return v == nil ? NO : [v boolValue];
+}
+
 + (NSTimeInterval)detectWindow {
     id v = [self prefValue:kKeyWindow];
     NSTimeInterval t = (v == nil) ? 15.0 : [v doubleValue];

@@ -26,6 +26,10 @@ typedef NS_ENUM(NSInteger, QPEventKind) {
             appName:(NSString *)appName
              detail:(nullable NSString *)detail;
 
+/// 心跳：dylib 成功加载就登记一次，不增加拦截计数。
+/// 用来回答「这个 App 到底注入成功了没有」。
++ (void)markLoaded:(NSString *)bundleID appName:(NSString *)appName;
+
 @end
 
 NS_ASSUME_NONNULL_END

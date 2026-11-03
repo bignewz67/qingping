@@ -355,6 +355,184 @@ static void QPHandleController(UIViewController *vc) {
     QPScheduleSkip(vc, cls, 0);
 }
 
+#pragma mark - 信息流 / 悬浮广告清理（实验）
+
+static NSHashTable *QPTouchedCells = nil;
+
+static BOOL QPTextIsAdMark(NSString *text) {
+    if (text.length == 0 || text.length > 4) return NO;
+    NSString *t = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (t.length == 0) return NO;
+    return [t isEqualToString:@"广告"] || [t isEqualToString:@"推广"] ||
+           [t isEqualToString:@"赞助"] || [t isEqualToString:@"AD"] || [t isEqualToString:@"ad"];
+}
+
+/// 信息流卡片角上的「广告」小标签
+static UILabel *QPFindAdMarkLabel(UIView *root, NSInteger depth) {
+    if (root == nil || depth > 8 || QPVisitBudget <= 0) return nil;
+    QPVisitBudget -= 1;
+
+    if ([root isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)root;
+        if (QPTextIsAdMark(label.text) &&
+            label.bounds.size.width < 90 && label.bounds.size.height < 34) {
+            return label;
+        }
+    }
+    for (UIView *sub in root.subviews) {
+        UILabel *found = QPFindAdMarkLabel(sub, depth + 1);
+        if (found != nil) return found;
+    }
+    return nil;
+}
+
+static UIControl *QPFindCloseControl(UIView *root, NSInteger depth) {
+    if (root == nil || depth > 8 || QPVisitBudget <= 0) return nil;
+    QPVisitBudget -= 1;
+
+    NSString *text = nil;
+    if ([root isKindOfClass:[UIButton class]]) {
+        text = [(UIButton *)root titleForState:UIControlStateNormal];
+    } else if ([root isKindOfClass:[UILabel class]]) {
+        text = [(UILabel *)root text];
+    }
+    if (text.length > 0 && text.length <= 4) {
+        NSString *t = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([t isEqualToString:@"×"] || [t isEqualToString:@"✕"] || [t isEqualToString:@"X"] ||
+            [t isEqualToString:@"x"] || [t isEqualToString:@"关闭"] || [t isEqualToString:@"不感兴趣"]) {
+            if ([root isKindOfClass:[UIControl class]]) return (UIControl *)root;
+            UIView *parent = root.superview;
+            for (int i = 0; i < 3 && parent != nil; i++) {
+                if ([parent isKindOfClass:[UIControl class]]) return (UIControl *)parent;
+                parent = parent.superview;
+            }
+        }
+    }
+    for (UIView *sub in root.subviews) {
+        UIControl *found = QPFindCloseControl(sub, depth + 1);
+        if (found != nil) return found;
+    }
+    return nil;
+}
+
+/// 悬浮挂件：体积小、位于屏幕下半部、类名或文案像广告
+static BOOL QPLooksLikeFloatingAd(UIView *view) {
+    if (view == nil || view.window == nil) return NO;
+    if (view.hidden || view.alpha < 0.2) return NO;
+
+    CGSize screen = view.window.bounds.size;
+    CGRect rect = [view convertRect:view.bounds toView:view.window];
+    if (rect.size.width < 40 || rect.size.height < 40) return NO;
+    if (rect.size.width > screen.width * 0.75) return NO;
+    if (rect.size.height > screen.height * 0.4) return NO;
+    if (rect.origin.y < screen.height * 0.35) return NO;
+
+    NSString *cls = NSStringFromClass([view class]);
+    if ([cls containsString:@"Ad"] || [cls containsString:@"Float"] ||
+        [cls containsString:@"Pendant"] || [cls containsString:@"Banner"] ||
+        [cls containsString:@"Ball"] || [cls containsString:@"RedPacket"]) {
+        return YES;
+    }
+    QPVisitBudget = 300;
+    return QPFindAdMarkLabel(view, 0) != nil;
+}
+
+static void QPHandleFeedCell(UIView *cell) {
+    if (cell == nil || cell.hidden) return;
+    if (QPTouchedCells == nil) QPTouchedCells = [NSHashTable weakObjectsHashTable];
+    if ([QPTouchedCells containsObject:cell]) return;
+
+    QPVisitBudget = 800;
+    UILabel *mark = QPFindAdMarkLabel(cell, 0);
+    if (mark == nil) return;
+
+    [QPTouchedCells addObject:cell];
+
+    QPVisitBudget = 800;
+    UIControl *close = QPFindCloseControl(cell, 0);
+    if (close != nil) {
+        [close sendActionsForControlEvents:UIControlEventTouchUpInside];
+        QPLog(@"feed ad: tapped close button");
+        return;
+    }
+
+    UIView *content = nil;
+    if ([cell isKindOfClass:[UITableViewCell class]]) {
+        content = ((UITableViewCell *)cell).contentView;
+    }
+    if (content == nil) content = cell;
+    for (UIView *sub in content.subviews) sub.hidden = YES;
+    QPLog(@"feed ad: hidden (no close button)");
+}
+
+static void QPSweepFeedInView(UIView *root, NSInteger depth) {
+    if (root == nil || depth > 8) return;
+
+    if ([root isKindOfClass:[UITableView class]]) {
+        for (UITableViewCell *cell in [(UITableView *)root visibleCells]) {
+            QPHandleFeedCell(cell);
+        }
+    } else if ([root isKindOfClass:[UICollectionView class]]) {
+        for (UICollectionViewCell *cell in [(UICollectionView *)root visibleCells]) {
+            QPHandleFeedCell(cell);
+        }
+    }
+    for (UIView *sub in root.subviews) {
+        QPSweepFeedInView(sub, depth + 1);
+    }
+}
+
+static void QPSweepAds(void) {
+    if (!QPIsOn()) return;
+
+    BOOL widgets = [QPConfig cleanWidgets];
+    BOOL feed = [QPConfig cleanFeed];
+    if (!widgets && !feed) return;
+
+    UIWindow *key = QPKeyWindow();
+    if (key == nil) return;
+
+    if (widgets) {
+        for (UIView *sub in [key.subviews copy]) {
+            if (!QPLooksLikeFloatingAd(sub)) continue;
+            QPVisitBudget = 400;
+            UIControl *close = QPFindCloseControl(sub, 0);
+            if (close != nil) {
+                [close sendActionsForControlEvents:UIControlEventTouchUpInside];
+            } else {
+                [sub removeFromSuperview];
+            }
+            QPLog(@"floating ad removed (%@)", NSStringFromClass([sub class]));
+        }
+        UIView *rootView = key.rootViewController.view;
+        for (UIView *sub in [rootView.subviews copy]) {
+            if (!QPLooksLikeFloatingAd(sub)) continue;
+            [sub removeFromSuperview];
+            QPLog(@"floating ad removed from root view");
+        }
+    }
+
+    if (feed) {
+        QPSweepFeedInView(key, 0);
+    }
+}
+
+static void QPStartAdSweeper(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                         dispatch_get_main_queue());
+        dispatch_source_set_timer(timer,
+                                  dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2ull * NSEC_PER_SEC)),
+                                  (uint64_t)(2ull * NSEC_PER_SEC),
+                                  (uint64_t)(0.3 * NSEC_PER_SEC));
+        dispatch_source_set_event_handler(timer, ^{
+            QPSweepAds();
+        });
+        dispatch_resume(timer);
+    });
+}
+
 #pragma mark - 通知
 
 static void QPInstallObservers(void) {
@@ -592,6 +770,10 @@ static void QPStart(void) {
 
         QPInstallHooks();
         QPInstallObservers();
+        QPStartAdSweeper();
+
+        // 心跳：让「清屏」知道这个 App 已经被注入过
+        [QPStore markLoaded:bundleID appName:[QPConfig appDisplayNameForBundle:bundleID]];
 
         QPLog(@"active for %@", bundleID);
     }

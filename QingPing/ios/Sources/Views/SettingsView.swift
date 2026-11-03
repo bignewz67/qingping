@@ -17,7 +17,9 @@ struct SettingsView: View {
             Form {
                 statusSection
                 protectionSection
+                adCleanSection
                 dataSection
+                diagnosticsSection
                 aboutSection
             }
             .navigationTitle("设置")
@@ -104,6 +106,42 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: 广告清理
+
+    private var adCleanSection: some View {
+        Section {
+            Toggle(isOn: $prefs.cleanWidgets) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("清理悬浮广告挂件")
+                        Text("右下角红包、悬浮球一类的小浮层")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "eye.slash")
+                }
+            }
+
+            Toggle(isOn: $prefs.cleanFeed) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("清理信息流广告")
+                        Text("自动点广告卡片的 ×；没有 × 时隐藏内容，会留白")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "text.badge.xmark")
+                }
+            }
+        } header: {
+            Text("广告清理（实验）")
+        } footer: {
+            Text("通用规则，按文字和类名判断，可能误伤正常内容。默认关闭，建议先只开「悬浮挂件」观察一天。")
+        }
+    }
+
     // MARK: 数据
 
     private var dataSection: some View {
@@ -129,6 +167,39 @@ struct SettingsView: View {
             Button("清空", role: .destructive) { store.clearAll() }
         } message: {
             Text("只删除本机的拦截计数与事件记录，不影响防护开关。")
+        }
+    }
+
+    // MARK: 诊断
+
+    private var diagnosticsSection: some View {
+        let files = TweaksBridge.containerStatsFiles()
+        let readable = TweaksBridge.canReadContainers
+        let prefs = TweaksBridge.prefsDomainHasData
+
+        return Section {
+            HStack {
+                Text("容器目录")
+                Spacer()
+                Text(readable ? "可读" : "不可读")
+                    .foregroundColor(readable ? Color.qpTeal : Color.qpAmber)
+            }
+            HStack {
+                Text("统计文件")
+                Spacer()
+                Text("\(files.count) 个")
+                    .foregroundColor(Color.secondary)
+            }
+            HStack {
+                Text("共享偏好域")
+                Spacer()
+                Text(prefs ? "有数据" : "无数据")
+                    .foregroundColor(prefs ? Color.qpTeal : Color.secondary)
+            }
+        } header: {
+            Text("诊断")
+        } footer: {
+            Text("「容器目录不可读」= 清屏缺少平台权限；「统计文件 0 个」= 注入端还没写过数据。")
         }
     }
 

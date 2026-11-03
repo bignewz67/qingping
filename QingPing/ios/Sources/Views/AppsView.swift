@@ -94,9 +94,15 @@ struct AppRow: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text("\(app.total)")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
+                if app.isInjectedOnly {
+                    Text("已注入")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(Color.qpBlue)
+                } else {
+                    Text("\(app.total)")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
                 if let last = app.lastSeen {
                     Text(last, style: .relative)
                         .font(.caption2)

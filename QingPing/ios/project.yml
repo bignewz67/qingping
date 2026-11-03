@@ -4,6 +4,8 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
+  # XcodeGen 默认按 Xcode 16 的工程格式（objectVersion 77）生成，
+  # Xcode 15.x 打不开。固定成 15.3 格式，兼容性最好。
   projectFormat: xcode15_3
 
 settings:

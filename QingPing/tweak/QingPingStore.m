@@ -178,4 +178,37 @@ static void QPWriteContainerCopy(NSDictionary *root) {
     });
 }
 
++ (void)markLoaded:(NSString *)bundleID appName:(NSString *)appName {
+    if (bundleID.length == 0) return;
+    NSString *name = appName.length > 0 ? appName : bundleID;
+
+    dispatch_async(QPStoreQueue(), ^{
+        NSTimeInterval ts = [[NSDate date] timeIntervalSince1970];
+        int fd = QPLockAcquire();
+
+        @try {
+            NSMutableDictionary *root = QPRoot();
+            root[@"version"] = @1;
+            root[@"updatedAt"] = @(ts);
+
+            NSMutableDictionary *apps = [root[@"apps"] mutableCopy];
+            if (apps == nil) apps = [NSMutableDictionary dictionary];
+
+            NSMutableDictionary *app = [apps[bundleID] mutableCopy];
+            if (app == nil) app = [NSMutableDictionary dictionary];
+            app[@"name"] = name;
+            app[@"loadedAt"] = @(ts);
+            apps[bundleID] = app;
+            root[@"apps"] = apps;
+
+            QPWriteRoot(root);
+            QPWriteContainerCopy(root);
+        } @catch (NSException *exception) {
+            NSLog(@"[QingPing] markLoaded error: %@", exception);
+        }
+
+        QPLockRelease(fd);
+    });
+}
+
 @end

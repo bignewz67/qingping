@@ -70,10 +70,13 @@ struct AppStats: Identifiable, Hashable {
     var splash: Int
     var misclick: Int
     var lastSeen: Date?
+    /// 注入端加载过的时间（只有心跳、没有拦截时也有值）
+    var loadedAt: Date? = nil
 
     var id: String { bundleID }
     var total: Int { splash + misclick }
     var initial: String { String(name.prefix(1)) }
+    var isInjectedOnly: Bool { total == 0 && loadedAt != nil }
 }
 
 struct InterceptEvent: Identifiable, Hashable {

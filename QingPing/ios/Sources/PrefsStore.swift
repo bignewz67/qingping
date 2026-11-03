@@ -17,6 +17,8 @@ final class PrefsStore: ObservableObject {
     @Published var skipMode: SkipMode { didSet { persist() } }
     @Published var touchGuard: Bool { didSet { persist() } }
     @Published var ignoreList: [String] { didSet { persist() } }
+    @Published var cleanWidgets: Bool { didSet { persist() } }
+    @Published var cleanFeed: Bool { didSet { persist() } }
 
     init() {
         let defaults = UserDefaults(suiteName: Self.domain)
@@ -28,6 +30,8 @@ final class PrefsStore: ObservableObject {
         skipMode = SkipMode(rawValue: rawMode) ?? .tapButton
         touchGuard = root["touchGuard"] as? Bool ?? true
         ignoreList = root["ignoreList"] as? [String] ?? []
+        cleanWidgets = root["cleanWidgets"] as? Bool ?? false
+        cleanFeed = root["cleanFeed"] as? Bool ?? false
     }
 
     func isIgnored(_ bundleID: String) -> Bool {
@@ -50,6 +54,8 @@ final class PrefsStore: ObservableObject {
             "skipMode": skipMode.rawValue,
             "touchGuard": touchGuard,
             "ignoreList": ignoreList,
+            "cleanWidgets": cleanWidgets,
+            "cleanFeed": cleanFeed,
         ]
         defaults.set(root, forKey: "root")
         defaults.synchronize()

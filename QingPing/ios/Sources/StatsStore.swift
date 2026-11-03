@@ -31,6 +31,19 @@ enum TweaksBridge {
         if FileManager.default.fileExists(atPath: statsPath) { return true }
         return !containerStatsFiles().isEmpty
     }
+
+    /// 能不能列目录（不能 = 缺平台权限，沙盒挡住了）
+    static var canReadContainers: Bool {
+        (try? FileManager.default.contentsOfDirectory(atPath: containersPath)) != nil
+    }
+
+    /// 共享偏好域里有没有数据（注入端走 cfprefsd 写的那份）
+    static var prefsDomainHasData: Bool {
+        guard let defaults = UserDefaults(suiteName: "com.qingping.stats") else { return false }
+        defaults.synchronize()
+        let root = defaults.dictionary(forKey: "root")
+        return !(root?.isEmpty ?? true)
+    }
 }
 
 // MARK: - Store
@@ -123,13 +136,15 @@ final class StatsStore: ObservableObject {
                 let name = (info["name"] as? String) ?? bundleID
                 let splash = intValue(info["splash"])
                 let misclick = intValue(info["misclick"])
-                guard splash + misclick > 0 else { continue }
+                let loaded = doubleValue(info["loadedAt"]).map { Date(timeIntervalSince1970: $0) }
+                guard splash + misclick > 0 || loaded != nil else { continue }
                 let last = doubleValue(info["last"]).map { Date(timeIntervalSince1970: $0) }
                 apps.append(AppStats(bundleID: bundleID,
                                      name: name,
                                      splash: splash,
                                      misclick: misclick,
-                                     lastSeen: last))
+                                     lastSeen: last,
+                                     loadedAt: loaded))
             }
         }
 
