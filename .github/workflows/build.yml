@@ -78,6 +78,14 @@ jobs:
           ROOT='${{ steps.locate.outputs.root }}'
           mkdir -p out/Payload
           cp -R "$ROOT/ios/build/Build/Products/Release-iphoneos/QingPing.app" out/Payload/
+          ENT="$ROOT/ios/QingPing.entitlements"
+          if [ -f "$ENT" ]; then
+            codesign -f -s - --entitlements "$ENT" --timestamp=none "out/Payload/QingPing.app"
+            echo "--- entitlements ---"
+            codesign -d --entitlements :- "out/Payload/QingPing.app" 2>/dev/null || true
+          else
+            echo "没找到 entitlements，跳过签名"
+          fi
           cd out && zip -qry QingPing.ipa Payload
           ls -la QingPing.ipa
 
